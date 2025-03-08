@@ -1,0 +1,406 @@
+---
+title: "Problem Set 4"
+author: "MaCCS 201 - Fall 2024"
+date: "`r Sys.Date()`"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+setwd("/Users/chris/Library/Mobile Documents/com~apple~CloudDocs/Berkeley/COMPSS 212 Applied Statistics I/public-repository-1/problem_set_4")
+options(htmltools.dir.version = FALSE)
+library(pacman)
+p_load(foreign,Synth,tidyverse)
+```
+
+Tentative Due Date: December 19
+
+This will be a pass fail Problem Set.
+
+Please submit markdown file named [last_name]\_[first_name]\_ps4.Rmd or
+a pdf with all code and answers.
+
+# Part A: Difference in Differences.
+
+Let's replicate the OG. Card and Krueger. We have been talking about
+them forever. Plus the consequences of raising the minimum wage will be
+forever policy relevant. The dataset is in Stata form, which is easy to
+import (I will show you below). It is called cardkrueger.dta.
+
+The interviewed Fast food restaurants in two waves in New Jersey and
+Pennsylvania 3/1992 and 11/1992). In the middle the minimum wage in NJ
+went up from \$4.25 to 5.05 per hour but did not change across the
+border. You will DiD to see whether you detect an effect of raising the
+minimum wage. If you see a 1 or a 2 at the end of a variable that
+indicates which survey wave it is from.
+
+The variables you need are:
+
+-   state: `NJ=1`, `PA=0`
+-   `wage_st` / `wage_st2`: Starting wage at the restaurant
+-   `fte` / `fte2`: Full-time equiv. employment = \#(Full time
+    employees) + \#(Part-time Employees)/2. Excludes managers.
+-   `chain`: which fast food chain you are dealing with (there are 4.)
+-   `co_owned`: = 1 if restaurant is company-owned, =0 if franchised
+-   `sample`: Dummy variable = 1 if wage and employment data are
+    available for both survey waves
+
+```{r}
+
+library(haven)
+library(dplyr)
+library(tidyr)
+library(broom)
+library(sandwich)
+library(lmtest)
+
+ck_data <- read_dta("cardkrueger.dta")
+
+ck_data
+```
+
+### **1.1 Dump all observation for which `sample=0`, so you have balance.**
+
+```{r}
+filtered_data <- ck_data %>%
+  filter(sample == 1)
+
+filtered_data
+```
+
+### **1.2 Create a variable `treated` which equals one if the state is NJ and zero otherwise.**
+
+```{r}
+filtered_data <- filtered_data %>%
+  mutate(treated = ifelse(state == 1, 1, 0))
+
+filtered_data
+```
+
+### 1.3 **Create a dummy called `after`, which equals 1 if the observation is from round 2.**
+
+```{r}
+filtered_data <- filtered_data %>%
+  bind_rows(filtered_data) %>%  # Duplicate all rows
+  mutate(
+    after = rep(c(0, 1), each = nrow(filtered_data)),  # 0 for the first set (before), 1 for the second set (after)
+    empft = ifelse(after == 0, empft, empft2),  # Combine empft and empft2
+    emppt = ifelse(after == 0, emppt, emppt2),  # Combine emppt and emppt2
+    fte = ifelse(after == 0, fte, fte2),        # Combine fte and fte2
+    wage_st = ifelse(after == 0, wage_st, wage_st2)  # Combine wage_st and wage_st2
+  ) %>%
+  select(-empft2, -emppt2, -fte2, -wage_st2)  # Optionally remove the original round 2 columns
+
+filtered_data
+```
+
+### 1.4 Calculate the difference in average (across stores) starting wages before and after for each state and then calculate the difference in difference by differencing the two. What do you get?
+
+```{r}
+# Calculate the average starting wages before and after for each state
+average_wages <- filtered_data %>%
+  group_by(state, after) %>%
+  summarize(avg_wage = mean(wage_st, na.rm = TRUE), .groups = "drop")
+
+# Separate the averages for each state and calculate the difference
+before_wages <- average_wages %>% filter(after == 0) %>% select(state, avg_wage)
+after_wages <- average_wages %>% filter(after == 1) %>% select(state, avg_wage)
+
+# Merge before and after averages for easier calculation
+wage_diff <- before_wages %>%
+  rename(avg_wage_before = avg_wage) %>%
+  inner_join(after_wages %>% rename(avg_wage_after = avg_wage), by = "state") %>%
+  mutate(diff = avg_wage_after - avg_wage_before)
+
+wage_diff
+```
+
+```{r}
+# Calculate the difference-in-differences
+diff_in_diff <- wage_diff %>% summarize(diff_in_diff = diff[state == 1] - diff[state == 0]) %>% pull(diff_in_diff)
+
+diff_in_diff
+```
+
+### 1.5 Do the same, but with average full time employment. What do you get?
+
+```{r}
+# Calculate the average full-time employment before and after for each state
+average_fte <- filtered_data %>%
+  group_by(state, after) %>%
+  summarize(avg_fte = mean(fte, na.rm = TRUE), .groups = "drop")
+
+# Separate the averages for each state and calculate the difference
+before_fte <- average_fte %>% filter(after == 0) %>% select(state, avg_fte)
+after_fte <- average_fte %>% filter(after == 1) %>% select(state, avg_fte)
+
+# Merge before and after averages for easier calculation
+fte_diff <- before_fte %>%
+  rename(avg_fte_before = avg_fte) %>%
+  inner_join(after_fte %>% rename(avg_fte_after = avg_fte), by = "state") %>%
+  mutate(diff = avg_fte_after - avg_fte_before)
+
+fte_diff
+```
+
+```{r}
+# Calculate the difference-in-differences
+diff_in_diff_fte <- fte_diff %>% summarize(diff_in_diff = diff[state == 1] - diff[state == 0]) %>% pull(diff_in_diff)
+
+diff_in_diff_fte
+```
+
+### 1.6 Now set your data up for proper DiD estimation (stacked or long format).
+
+**This is one of the most pain in the neck (seemingly simple but in
+practice annoying feats.) Instead of having observations "next" to each
+other, you want the round 1 observations to be the top block of rows and
+round 2 observations be the bottom block of rows. You should have the
+indicator `after`, which is now 0 for the before and 1 for the after
+periods as a nice column.**
+
+```{r}
+did_data <- filtered_data %>%
+  arrange(after) %>%  # Sort rows so that "after = 0" (round 1) rows come first
+  select(state, chain, treated, after, empft, emppt, fte, wage_st, co_owned)  # Keep relevant columns
+
+did_data
+```
+
+### 1.7 Run a difference in difference regression on these data.
+
+**First use `wage` as the outcome. Then use full time employment as the
+outcome. The unit of observation is the store here!**
+
+```{r}
+library(fixest)
+
+# Wage as the outcome
+did_wage <- feols(wage_st ~ treated * after, data = did_data)
+summary(did_wage)
+```
+
+```{r}
+# Full-time employment as the outcome
+did_fte <- feols(fte ~ treated * after, data = did_data)
+summary(did_fte)
+```
+
+### 1.8 Do the same thing as in 7, but control for whether the store is a franchise or not. What do you see?
+
+```{r}
+# Wage as the outcome with franchise control
+did_wage_control <- lm(wage_st ~ treated * after + co_owned, data = did_data)
+summary(did_wage_control)
+```
+
+```{r}
+# Full-time employment as the outcome with franchise control
+did_fte_control <- lm(fte ~ treated * after + co_owned, data = did_data)
+summary(did_fte_control)
+```
+
+### 1.9 Cluster your standard errors by state. Then cluster by store. What do you see?
+
+-   cluster by state
+
+```{r}
+
+# Wage as the outcome (clustered by state)
+cluster_state <- coeftest(did_wage_control, vcov = vcovCL, cluster = ~ state)
+cluster_state
+```
+
+```{r}
+# Full-time employment as the outcome (clustered by state)
+cluster_state_fte <- coeftest(did_fte_control, vcov = vcovCL, cluster = ~ state)
+cluster_state_fte
+```
+
+-   cluster by store
+
+```{r}
+# Wage as the outcome (clustered by store)
+cluster_store <- coeftest(did_wage_control, vcov = vcovCL, cluster = ~ chain)
+cluster_store
+```
+
+```{r}
+# Full-time employment as the outcome (clustered by store)
+cluster_store_fte <- coeftest(did_fte_control, vcov = vcovCL, cluster = ~ chain)
+cluster_store_fte
+```
+
+# Part B: Synthetic Controls
+
+Let's replicate another OG. Abadie and Gardeazabal (2003). They estimate
+the effect of terrorist conflict in the Basque Country (Spain) on GDP
+per capita. You essentially consturct a synthetic version of Basque
+Country.
+
+```{R, load_data2, include = F, cache = T}
+rm(list = ls())
+library(Synth)
+library(dplyr)
+
+data(basque)
+```
+
+```{r}
+basque
+```
+
+### 2.1 Data Prepare
+
+1.  **You want to use the following variables as predictors.
+    "`school.illit`", "`school.prim`", "`school.med`", "`school.high`",
+    "`school.post.high`", "`invest`"**
+
+2.  **You want to use the `mean` as the relevant operator.**
+
+3.  **As special predictors you do: special.predictors = list(
+    list("gdpcap", 1960:1969 , "mean"), list("sec.agriculture",
+    seq(1961, 1969, 2), "mean"), list("sec.energy", seq(1961, 1969, 2),
+    "mean"), list("sec.industry", seq(1961, 1969, 2), "mean"),
+    list("sec.construction", seq(1961, 1969, 2), "mean"),
+    list("sec.services.venta", seq(1961, 1969, 2), "mean"),
+    list("sec.services.nonventa", seq(1961, 1969, 2), "mean"),
+    list("popdens", 1969, "mean"))**
+
+4.  **The dependent variable is `gdpcap`**
+
+5.  **The unit variable is `regionno`**
+
+6.  **The unit names variable is "`regionname`"**
+
+7.  **The time variable is "`year`"**
+
+8.  **The treatment identifier should be obvious. (Basque Country!!!)**
+
+9.  **As controls identifiers use `2:16` and `18`. Leave out 1, because
+    that is all of Spain.**
+
+10. **`time.optimize.ssr = 1960:1969`**
+
+11. **`time.plot = 1955:1997`**
+
+```{r}
+dataprep.out <- dataprep(
+  foo = basque,  # Dataset containing the data
+  predictors = c("school.illit", "school.prim", "school.med", 
+                 "school.high", "school.post.high", "invest"),  # Predictors
+  special.predictors = list(
+    list("gdpcap", 1960:1969, "mean"),  # GDP per capita, mean from 1960 to 1969
+    list("sec.agriculture", seq(1961, 1969, 2), "mean"),  # Agriculture sector, mean for odd years
+    list("sec.energy", seq(1961, 1969, 2), "mean"),  # Energy sector
+    list("sec.industry", seq(1961, 1969, 2), "mean"),  # Industry sector
+    list("sec.construction", seq(1961, 1969, 2), "mean"),  # Construction sector
+    list("sec.services.venta", seq(1961, 1969, 2), "mean"),  # Market services sector
+    list("sec.services.nonventa", seq(1961, 1969, 2), "mean"),  # Non-market services
+    list("popdens", 1969, "mean")  # Population density in 1969
+  ),
+  dependent = "gdpcap",  # Dependent variable is GDP per capita
+  unit.variable = "regionno",  # Unit identifier variable
+  unit.names.variable = "regionname",  # Unit names variable
+  time.variable = "year",  # Time variable
+  treatment.identifier = 17,  # Basque Country is the treated unit
+  controls.identifier = c(2:16, 18),  # Control units (leave out 1, which is Spain)
+  time.predictors.prior = 1960:1969,
+  time.optimize.ssr = 1960:1969,  # Pre-treatment period for optimization
+  time.plot = 1955:1997  # Period for plotting the results
+)
+
+dataprep.out
+```
+
+### 2.12 **As method use method = "BFGS"**
+
+```{r}
+synth.out <- synth(dataprep.out, method = "BFGS")
+
+synth.tables <- synth.tab(dataprep.res = dataprep.out, synth.res = synth.out)
+
+synth.tables
+```
+
+``` {)}
+```
+
+### 2.13 Generate a nice looking plot of the gap between the synthetic control and Basque Country GDP.
+
+```{r}
+gaps.plot(
+  dataprep.res = dataprep.out,
+  synth.res = synth.out,
+  Ylab = "Gap in GDP per Capita",
+  Xlab = "Year",
+  Main = "Gap Between Basque Country and Synthetic Control",
+  Ylim = c(-2, 2)  # Adjust Y-axis limits based on your data
+)
+```
+
+### 2.14 Create a falsification plot, using all other areas from 9. above as fake units.
+
+```{r}
+gaps_list <- list()
+
+# Control identifiers
+controls <- c(2:16, 18)
+
+# Loop through each control unit
+for (control in controls) {
+  # Prepare the data for the current "fake" treated unit
+  dataprep_fake <- dataprep(
+    foo = basque,
+    predictors = c("school.illit", "school.prim", "school.med", 
+                   "school.high", "school.post.high", "invest"),
+    special.predictors = list(
+      list("gdpcap", 1960:1969, "mean"),
+      list("sec.agriculture", seq(1961, 1969, 2), "mean"),
+      list("sec.energy", seq(1961, 1969, 2), "mean"),
+      list("sec.industry", seq(1961, 1969, 2), "mean"),
+      list("sec.construction", seq(1961, 1969, 2), "mean"),
+      list("sec.services.venta", seq(1961, 1969, 2), "mean"),
+      list("sec.services.nonventa", seq(1961, 1969, 2), "mean"),
+      list("popdens", 1969, "mean")
+    ),
+    dependent = "gdpcap",
+    unit.variable = "regionno",
+    unit.names.variable = "regionname",
+    time.variable = "year",
+    treatment.identifier = control,  # Treat current control as treated
+    controls.identifier = setdiff(controls, control),  # Other controls
+    time.predictors.prior = 1960:1969,
+    time.optimize.ssr = 1960:1969,
+    time.plot = 1955:1997
+  )
+  
+  # Run the synthetic control method
+  synth_fake <- synth(dataprep_fake)
+  
+  # Store the gap (actual - synthetic)
+  gaps_list[[as.character(control)]] <- 
+    dataprep_fake$Y1plot - (dataprep_fake$Y0plot %*% synth_fake$solution.w)
+}
+
+# Include the real treated unit (Basque Country)
+gaps_list$Basque <- dataprep.out$Y1plot - (dataprep.out$Y0plot %*% synth.out$solution.w)
+
+# Plot all gaps
+plot(1955:1997, gaps_list$Basque, type = "l", col = "red", lwd = 2, 
+     ylim = range(unlist(gaps_list)), xlab = "Year", ylab = "Gap in GDP per Capita", 
+     main = "Falsification Plot")
+for (control in names(gaps_list)) {
+  if (control != "Basque") {
+    lines(1955:1997, gaps_list[[control]], col = "gray", lwd = 1)
+  }
+}
+legend("topright", legend = c("Basque Country", "Control Units"), 
+       col = c("red", "gray"), lty = 1, lwd = 2)
+```
+
+### 2.15 Optional. Repeat 14, but fake move treatment up a bit.

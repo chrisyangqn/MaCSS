@@ -1,0 +1,274 @@
+---
+title: "Problem Set 3"
+author: "MaCCS 201 - Fall 2024"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls()) # clear memory
+setwd("/Users/chris/Library/Mobile Documents/com~apple~CloudDocs/Berkeley/COMPSS 212 Applied Statistics I/public-repository-1/problem_set_3")
+
+# options(htmltools.dir.version = FALSE)
+# p_load(FSM,car,lfe, skedastic, parallel,GGally,broom,kableExtra, estimatr,plm,leaflet, gganimate, ggplot2, ggthemes, viridis, dplyr, magrittr, knitr,pagedown,tibble,latex2exp,MASS,stargazer)
+```
+
+```{r}
+library(tidyverse)
+library(broom)
+```
+
+# Part A: Data Analysis from Blackburn and Neumark (QJE 1992)
+
+**Let's take a look at the data from Blackburn and Neumark (QJE 1992). We would like to estimate the model:**
+
+$$
+\log(\text{wage}) = \beta_0 + \text{exper} \cdot \beta_1 + \text{tenure} \cdot \beta_2 + \text{married} \cdot \beta_3 + \text{south} \cdot \beta_4 + \text{urban} \cdot \beta_5 + \text{black} \cdot \beta_6 + \text{educ} \cdot \beta_7 + \text{abil} \cdot \gamma + \epsilon
+$$
+
+**One of the big problems in the wage literature is that we do not observe ability. If ability is not correlated with any of the right hand side variables, we can include it in the disturbance and nothing is lost by not observing it. If, however, it is correlated with one or more of the right hand side variables, OLS is no longer unbiased or consistent. Assume that ability is correlated with education and none of the other right hand side variables.**
+
+## Q1 Derive the Bias of $\beta_7$
+
+**Derive the bias of** $\beta_7$ **and show what direction the bias goes in depending on whether the correlation between ability and education is positive or negative.**
+
+$$
+\text{bias}(\hat{β}_7) = \gamma \cdot \frac{\text{Cov}(educ, abil)}{\text{Var}(educ)}
+$$
+
+```{r}
+data <- read.csv("newburn.csv")
+
+# Step 1: Check correlation between ability (IQ) and education
+cor(data$iq, data$educ, use = "complete.obs")
+```
+
+The correlation between ability and education is positive.
+
+```{r}
+# Step 2: Estimate the model without IQ (omitting ability)
+model_without_ability <- lm(lwage ~ exper + tenure + married + south + urban + black + educ, data = data)
+
+# Step 3: Estimate the model including IQ as a proxy for ability
+model_with_ability <- lm(lwage ~ exper + tenure + married + south + urban + black + educ + iq, data = data)
+
+# Step 4: Compare estimates of beta_7 (educ coefficient) in both models
+beta7_comparison <- data.frame(
+  Model = c("Without Ability", "With Ability"),
+  Estimate = c(coef(model_without_ability)["educ"], coef(model_with_ability)["educ"]),
+  Std_Error = c(summary(model_without_ability)$coefficients["educ", "Std. Error"],
+                summary(model_with_ability)$coefficients["educ", "Std. Error"])
+)
+print(beta7_comparison)
+```
+
+The correlation between ability and education is positive, when ability (IQ) is included, the estimate of $\beta_7$ decreases from approximately 0.065 to 0.054. This indicates that omitting ability from the model leads to an upward bias in the estimate of $\beta_7$.
+
+## Q2 Proxy for Ability with IQ
+
+**You showed in the first part that we can derive the sign/direction of the bias. One approach that has been take in the literature is using a "proxy" variable for the unobservable ability. We will use IQ here to proxy for ability. Estimate the model above excluding ability, record your parameter estimates, standard errors and** $R^2$**.**
+
+```{r}
+# Extract parameter estimates and standard errors
+model_without_ability_summary <- summary(model_without_ability)
+estimates <- coef(model_without_ability_summary)
+
+parameter_estimates <- data.frame(
+  Term = rownames(estimates),
+  Estimate = estimates[, "Estimate"],
+  Std_Error = estimates[, "Std. Error"]
+)
+
+# Display results
+parameter_estimates
+```
+
+```{r}
+model_without_ability_summary$r.squared
+```
+
+## Q3 Estimation with IQ as a Proxy
+
+**Estimate the model including IQ as a proxy, record your parameter estimates, standard errors and** $R^2$**.**
+
+```{r}
+# Extract parameter estimates and standard errors
+model_with_ability_summary <- summary(model_with_ability)
+estimates <- coef(model_with_ability_summary)
+
+parameter_estimates <- data.frame(
+  Term = rownames(estimates),
+  Estimate = estimates[, "Estimate"],
+  Std_Error = estimates[, "Std. Error"]
+)
+
+# Display results
+parameter_estimates
+```
+
+```{r}
+model_with_ability_summary$r.squared
+```
+
+## Q4 Impact on Returns to Schooling
+
+**What happens to returns to schooling? Does this result confirm your suspicion of how ability and schooling are expected to be correlated?**
+
+The returns to schooling, represented by the coefficient for education (educ), decrease when IQ (as a proxy for ability) is included in the model:
+
+-   Without IQ (Omitted Ability): The coefficient on education is approximately 0.065.
+
+-   With IQ (Included Ability): The coefficient on education decreases to approximately 0.054.
+
+The result is intuitive, when IQ is omitted, the estimated coefficient for education is higher, suggesting a stronger effect of education on wages. Including IQ reduces this coefficient, implying that part of what was attributed to education was actually due to ability (IQ) rather than the effect of education alone, which means wage and education level are all dependent on ability.
+
+# Part B: Data Analysis From David Card (1995)
+
+**This next problem asks you to try and recreate some of the results in Card (1995), which is on git. Use the dataset card. raw on git.**
+
+## Q1 Data Import and Visualization
+
+**Read the data into R. Plot the series make sure your data are read in correctly.**
+
+```{r}
+# Read the Card (1995) dataset
+data_card <- read.csv("card.csv")
+
+ggplot(data_card, aes(x = educ, y = lwage)) +
+  geom_point() +
+  labs(title = "Log(Wage) vs Education",
+       x = "Education (years)",
+       y = "Log(Wage)")
+```
+
+```{r}
+ggplot(data_card, aes(x = exper, y = lwage)) +
+  geom_point() +
+  labs(title = "Log(Wage) vs Experience",
+       x = "Experience (years)",
+       y = "Log(Wage)")
+```
+
+## Q2 Log(Wage) Regression via Least Squares
+
+**Estimate a** $\log(wage)$ **regression via Least Squares with** $educ$, $exper$, $exper^2$, $black$, $south$, $smsa$, $reg661$ **through** $reg668$ **and** $smsa66$ **on the right hand side. Check your results against Table2, column 5.**
+
+```{r}
+# Create an experience squared variable for the regression
+data_card <- data_card %>%
+  mutate(exper2 = exper^2)
+
+# Run the OLS regression for log(wage) with the specified predictors
+model_log_wage <- lm(lwage ~ educ + exper + exper2 + black + south + smsa + 
+                     reg661 + reg662 + reg663 + reg664 + reg665 + reg666 + 
+                     reg667 + reg668 + smsa66, data = data_card)
+
+# Display the summary of the regression results
+summary(model_log_wage)
+```
+
+| Variable               | Estimate (Table 2, Col 5) | Estimate (My Output) |
+|------------------------|---------------------------|----------------------|
+| **Education**          | 0.073                     | 0.0747               |
+| **Experience**         | 0.085                     | 0.0848               |
+| **Experience-Squared** | -0.229                    | -0.0023              |
+| **Black**              | -0.189                    | -0.199               |
+| **South**              | -0.146                    | -0.148               |
+| **SMSA**               | 0.138                     | 0.136                |
+| **R-squared**          | 0.304                     | 0.2998               |
+
+## Q3 Reduced Form Equation for Education
+
+**Estimate a reduced form equation for educ containing all of the explanatory variables and the dummy variable** $nearc4$. **Is the partial correlation between** $nearc4$ **and** $educ$ **statistically significant?**
+
+```{r}
+# Fit the reduced form regression model for education
+# educ is the dependent variable, and we include nearc4 and other explanatory variables
+reduced_form_model <- lm(educ ~ exper + exper2 + black + south + smsa + 
+                         reg661 + reg662 + reg663 + reg664 + reg665 + reg666 + 
+                         reg667 + reg668 + smsa66 + nearc4, data = data_card)
+
+# Display the summary of the reduced form model
+summary(reduced_form_model)
+```
+
+The partial correlation between $nearc4$ and $educ$ is significantly 0.3199\*\*\*.
+
+## Q4 Instrumental Variables Estimation of Log(Wage)
+
+**Estimate the log(wage) equation by instrumental variables, using** $nearc4$ **as an instrument for** $educ$**.**
+
+```{r}
+library(AER)
+
+# Instrumental Variables (IV) estimation for log(wage) with nearc4 as an instrument for educ
+iv_model <- ivreg(lwage ~ educ + exper + exper2 + black + south + smsa + 
+                  reg661 + reg662 + reg663 + reg664 + reg665 + reg666 + 
+                  reg667 + reg668 + smsa66 | 
+                  exper + exper2 + black + south + smsa + reg661 + reg662 + 
+                  reg663 + reg664 + reg665 + reg666 + reg667 + reg668 + 
+                  smsa66 + nearc4, data = data_card)
+
+# Display the summary of the IV regression results
+summary(iv_model)
+```
+
+**Compare the 95% confidence interval for the return to education to that obtained from the Least Squares regression above.**
+
+```{r}
+# Extract the 95% confidence interval for the return to education (educ coefficient)
+confint(model_log_wage, level = 0.95)["educ", ]
+confint(iv_model, level = 0.95)["educ", ]
+```
+
+-   **Significance**: Both intervals are above zero, indicating that education has a statistically significant positive effect on log(wage) in both models.
+
+-   **Potential Endogeneity in OLS Estimate**: The difference in intervals may suggest that the OLS estimate of the return to education is biased.
+
+-   **Wider Confidence Interval in IV Model**: The IV estimate might be less biased, but the larger confidence interval suggests that the instrumented estimate for the return to education is less precise.
+
+## Q5 Multiple Instruments for Education
+
+**Now use multiple instruments. Use** $nearc2$ **and** $nearc4$ **as instruments for educ. Comment on the significance of the partial correlations of both instruments in the reduced form. Show your standard errors from the second stage and compare them to the correct standard errors.**
+
+```{r}
+# Run the reduced form regression for educ with both nearc2 and nearc4 as instruments
+reduced_form_multiple_instruments <- lm(educ ~ exper + exper2 + black + south + smsa + 
+                                        reg661 + reg662 + reg663 + reg664 + reg665 + 
+                                        reg666 + reg667 + reg668 + smsa66 + nearc2 + nearc4, 
+                                        data = data_card)
+
+# Display the summary of the reduced form model
+summary(reduced_form_multiple_instruments)
+```
+
+```{r}
+library(AER)
+
+iv_model_multiple_instruments <- ivreg(lwage ~ educ + exper + exper2 + black + south + smsa + 
+                                       reg661 + reg662 + reg663 + reg664 + reg665 + reg666 + 
+                                       reg667 + reg668 + smsa66 | 
+                                       exper + exper2 + black + south + smsa + reg661 + reg662 + 
+                                       reg663 + reg664 + reg665 + reg666 + reg667 + reg668 + 
+                                       smsa66 + nearc2 + nearc4, data = data_card)
+
+summary(iv_model_multiple_instruments)
+```
+
+```{r}
+library(sandwich)
+
+# Calculate robust (heteroskedasticity-consistent) standard errors
+robust_se <- sqrt(diag(vcovHC(iv_model_multiple_instruments, type = "HC1")))
+
+# Display the coefficients along with both regular and robust standard errors
+results <- cbind(
+  Estimate = coef(iv_model_multiple_instruments),
+  Std_Error = summary(iv_model_multiple_instruments)$coefficients[, "Std. Error"],
+  Robust_SE = robust_se
+)
+results
+```

@@ -1,0 +1,254 @@
+---
+title: "Problem Set 1"
+author: "MaCCS 201 - Fall 2024"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls()) # clear memory
+setwd("/Users/chris/Library/Mobile Documents/com~apple~CloudDocs/Berkeley/COMPSS 212 Applied Statistics I/public-repository-1/problem_set_2")
+
+# options(htmltools.dir.version = FALSE)
+# p_load(FSM,car,lfe, skedastic, parallel,GGally,broom,kableExtra, estimatr,plm,leaflet, gganimate, ggplot2, ggthemes, viridis, dplyr, magrittr, knitr,pagedown,tibble,latex2exp,MASS,stargazer)
+
+```
+
+## Tentative Due Date: October 19
+
+### Please submit markdown file named [last_name]\_[first_name]\_ps1.Rmd or a pdf with all code and answers.
+
+# Part A: Which songs become popular?
+
+**You are working for Spotify. You are feeling pretty good about yourself about this gig. Your senior VP walks in and says "Hey fancy stats person, can you help us figure out which factors affect the popularity of a song? The predictive analytics shop is doing a pretty good job at predicting, but I want to truly understand what factors drive popularity, instead of some black box ML algorithm output." She Whatsapps you a dataset of 18835 songs she found on Kaggle. The dataset is called `song_data.csv`. It has a number of characteristics of each song in it.**
+
+```{r}
+
+library(pacman)
+library(psych)
+library(dplyr)
+library(GGally)
+library(ggcorrplot)
+library(sandwich)
+library(lmtest)
+```
+
+### Q1
+
+**Create a nice looking summary statistics table in R, which lists the mean, standard deviation, min and and max for each of the variables.**
+
+```{r}
+data <- read.csv(file = 'song_data.csv')
+
+data_numeric <- subset(data, select = -song_name)
+
+summary_statistics <- data.frame(
+  mean = sapply(data_numeric, mean, na.rm = TRUE),
+  std = sapply(data_numeric, sd, na.rm = TRUE),
+  min = sapply(data_numeric, min, na.rm = TRUE),
+  max = sapply(data_numeric, max, na.rm = TRUE)
+)
+
+# View the summary statistics
+print(summary_statistics)
+```
+
+### Q2
+
+**We will focus on the variables `song_popularity, song_duration_ms, acousticness, danceability, energy, tempo`. Make a nice correlation matrix figure. I used `ggpairs`, but knock yourself out. What do you see? Any interesting correlations?**
+
+```{r correlogram, include=TRUE}
+
+selected_variables <- data %>%
+  select(song_popularity, song_duration_ms, acousticness, danceability, energy, tempo)
+
+cor_matrix <- cor(selected_variables, use = "complete.obs")
+
+ggcorrplot(cor_matrix, method = "square", type = "lower", lab = TRUE, 
+           colors = c("blue", "white", "red"), lab_size = 3, title = "Correlation Matrix")
+
+```
+
+-   The correlation between acousticness and energy is negatively high **(-0.66)**, indicates that musics with higher energy will lead to lower acousticness.
+
+-   The correlation between energy and tempo is positive **(0.16)**, represents that songs with higher energy levels are somewhat likely to have faster tempos.
+
+### Q3
+
+**Using the `lm` package, regress song_popularity on the other variables from the previous question. Produce some decent looking regression output.**
+
+```{r reg1, include=TRUE}
+
+model <- lm(song_popularity ~ song_duration_ms + acousticness + danceability + energy + tempo, data = selected_variables)
+
+summary(model)
+```
+
+**Compare the slope estimates from this regression to the correlations between the outcome and the right hand side variable from question 2. Any sign changes?**
+
+| Variables         | Estimates    | Correlations | Comparison                                                                                                                                                                              |
+|-------------------|--------------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Song Duration** | -0.000004778 | -0.02        | No sign changes. Both the regression and correlation show a weak negative relationship between song duration and song popularity. However, the effect is extremely small in both cases. |
+| **Acousticness**  | -7.017\*\*\* | -0.07        | No sign changes. Both the regression and correlation suggest a negative relationship. However, the regression estimate shows a much stronger effect than the correlation.               |
+| **Danceability**  | 12.15\*\*\*  | 0.1          | No sign changes. Both point toward a positive effect, with the regression estimate being much larger.                                                                                   |
+| **Energy**        | -6.155\*\*\* | 0            | **Sign changes.** The correlation suggests no relationship between energy and song popularity, but the regression shows a significant negative relationship.                            |
+| **Tempo**         | -0.0113\*    | -0.02        | No sign changes. Both the regression and correlation indicate a weak negative relationship between tempo and song popularity.                                                           |
+
+**Interpret the coefficient on the variable `danceability` correctly (in actual words!).**
+
+The estimated coefficient for `danceability` is **12.15** **(p \< 0.01)**. Controlling other variables, when the danceability score increase 1 unit, the popularity of a song is expected to increase by 12.15 units.
+
+This implies that danceable songs are tend to be significantly more popular. As the song becomes more suitable for dancing, it becomes more appealing to listeners and easier to spread, leading to an increase in its popularity score.
+
+**What does your F-Test tell you for this regression you ran?**
+
+The F-statistic from the regression output is **59.65 (p \<** **0.01)**, which means I can reject the null hypothesis that all the regression coefficients are equal to zero, and all the independent variables together significantly explain song popularity.
+
+### Q4
+
+**Plot the residuals from this regression against the predicted values.**
+
+```{r reg3, include=TRUE}
+
+predicted_values <- predict(model)
+residuals <- resid(model)
+
+plot(predicted_values, residuals, 
+     main = "Residuals vs Predicted Values", 
+     xlab = "Predicted Values", 
+     ylab = "Residuals", 
+     pch = 19, 
+     col = "lightpink1",
+     cex = 0.2)
+```
+
+**Are you worried about heteroskedasticity?**
+
+There might be heteroskedasticity. The residuals show some variability that appears to increase slightly as the predicted values rise, especially when residual values are relatively low. While Ideally, the residuals should be randomly scattered around zero with no discernible pattern.
+
+### Q5
+
+**Formally test for heteroskedasticity using the White test from the `skedastic` package (turns out `whitestrap` is absolute garbage). What do you conclude?**
+
+```{r reg4, include=TRUE}
+
+library(skedastic)
+
+# white_test_result <- white_test(model)
+```
+
+I've tried many ways but the `skedastic` package is still missing.
+
+### Q6
+
+**Using the `felm` package show regression output using the white robust standard errors.**
+
+```{r reg5, include=TRUE}
+
+library(lfe)
+
+model_felm <- felm(song_popularity ~ song_duration_ms + acousticness + danceability + energy + tempo, data = selected_variables)
+
+robust_se <- vcovHC(model_felm, type = "HC1")
+
+coeftest(model_felm, vcov = robust_se)
+```
+
+**Did the coefficients change?**
+
+The coefficients remain the same across both the standard and robust models because robust standard errors do not change the point estimates.
+
+**Did the standard errors on the coefficients change?**
+
+The standard errors are slightly different.
+
+| Variables         | Original   | Robust SE |
+|-------------------|------------|-----------|
+| **Song Duration** | 2.6386e-06 | 2.680e-06 |
+| **Acousticness**  | 0.75253    | 0.7521    |
+| **Danceability**  | 1.0434     | 1.052     |
+| **Energy**        | 0.99321    | 0.9969    |
+| **Tempo**         | 0.0055292  | 0.005653  |
+
+**Did any of your t-statistics change?**
+
+The t-statistics changed slightly after applying robust standard errors because the standard errors changed.
+
+| Variables         | Original | Robust SE |
+|-------------------|----------|-----------|
+| **Song Duration** | -1.783   | -1.8107   |
+| **Acousticness**  | -9.329   | -9.3240   |
+| **Danceability**  | 11.546   | 11.6433   |
+| **Energy**        | -6.174   | -6.1969   |
+| **Tempo**         | -1.998   | -2.0430   |
+
+**Did your F-Statistic Change?**
+
+```{r}
+
+n_coef <- length(coef(model_felm))
+n_obs <- nrow(model_felm$X)
+df_resid <- model_felm$df.residual
+
+wald_stat <- t(coef(model_felm)) %*% solve(robust_se) %*% coef(model_felm)
+f_statistic <- (wald_stat / n_coef) / (sum(residuals(model_felm)^2) / df_resid)
+
+f_statistic
+```
+
+The F-statistic has changed from 59.65 to 39.81 after applying White robust standard errors. This change indicates that heteroskedasticity was affecting the precision of the model's original estimates.
+
+### Q7
+
+**Now for the fun part. Packages are great. But let's do the White Test by hand, so we can understand what is happening. The first step is to generate your outcome variable for your White regression. Create a variable called e2, which is the squared residuals. Then create new variables, which are each the square of song_duration_ms, acousticness, danceability, energy, tempo. Then create interactions between these variables. These interactions are all possible pairwise products of these. e.g. acousticness x danceability and energy x danceability. Then run a regression of the squared residuals on the right hand side variables, their squares and the interactions you generated. Can you replicate the test statistic from step 5?**
+
+```{r reg6, include=TRUE}
+
+# Step 1: Fit the original regression model
+model_felm <- felm(song_popularity ~ song_duration_ms + acousticness + danceability + energy + tempo, data = selected_variables)
+
+# Step 2: Generate squared residuals (e2)
+e2 <- residuals(model_felm)^2
+
+# Step 3: Generate squared terms and interaction terms
+vars <- c("song_duration_ms", "acousticness", "danceability", "energy", "tempo")
+
+# Generate squared terms
+for (var in vars) {
+  selected_variables[[paste0(var, "_sq")]] <- selected_variables[[var]]^2
+}
+
+# Generate interaction terms
+for (i in 1:(length(vars)-1)) {
+  for (j in (i+1):length(vars)) {
+    var1 <- vars[i]
+    var2 <- vars[j]
+    selected_variables[[paste0(var1, "_", var2)]] <- selected_variables[[var1]] * selected_variables[[var2]]
+  }
+}
+
+# Step 4: Dynamically create the formula for the regression
+squared_vars <- paste0(vars, "_sq")
+interaction_vars <- combn(vars, 2, FUN = function(x) paste0(x[1], "_", x[2]))
+all_vars <- c(vars, squared_vars, interaction_vars)
+
+# Step 5: Run the White Test regression
+white_test_model <- lm(as.formula(paste("e2 ~", paste(all_vars, collapse = " + "))), data = selected_variables)
+
+# Step 6: Summarize the results of the White Test regression
+summary(white_test_model)
+
+# Step 7: Calculate the White test statistic
+n <- nrow(selected_variables)
+r_squared <- summary(white_test_model)$r.squared
+white_statistic <- n * r_squared
+
+# Display the White test statistic
+white_statistic
+
+```
+
+# Part B:Fully Optional and no extra credit for it.
+
+Sometimes students will argue that once you adjust for heteroskedastcity, your standard errors will always be bigger. This is not true. Can you come up with a simulation in R, which results in the standard errors being smaller after adjusting for heteroskedasticity?
