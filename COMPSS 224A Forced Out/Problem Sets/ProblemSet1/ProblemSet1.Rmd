@@ -1,0 +1,236 @@
+---
+title: "Problem Set 1"
+output: html_document
+date: "2025-02-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+```{r}
+# AI Usage
+# https://chatgpt.com/share/67a3f535-bcac-8003-8af2-11ef5e7517ee
+```
+
+```{r}
+# 📌 Load necessary libraries
+library(tidyverse)
+library(tidycensus)
+library(tigris)
+library(sf)
+
+# 📌 Set Census API Key (Replace with your own key)
+census_api_key("63217a192c5803bfc72aab537fe4bf19f6058326", install = TRUE, overwrite = TRUE)
+```
+
+```{r}
+# Define ACS variables to retrieve
+acs_vars <- c(
+  "B19013_001",  # Median Household Income
+  "B25070_001",  # Households paying 30%+ income on rent
+  "B25003_002",  # Owner-occupied housing
+  "B25003_003",  # Renter-occupied housing
+  "B17001_002"   # Individuals below poverty line
+)
+
+# Get ACS data for all counties in California (WITHOUT geometry)
+housing_data <- get_acs(
+  geography = "county",
+  variables = acs_vars,
+  state = "CA",
+  year = 2023,
+  survey = "acs5"
+)
+
+# Retrieve California County Shapefiles using `tigris`
+ca_counties <- counties(state = "CA", class = "sf")  # Get geographic shapes
+
+# Reshape ACS data: Pivot variables into columns
+housing_cleaned <- housing_data %>%
+  select(NAME, variable, estimate) %>%  # Keep relevant columns
+  pivot_wider(names_from = variable, values_from = estimate)
+
+# Check column names before renaming
+print(colnames(housing_cleaned))
+```
+
+# Data Cleaning
+
+```{r}
+# Rename columns dynamically
+housing_cleaned <- housing_cleaned %>%
+  rename_with(~ case_when(
+    . == "B19013_001" ~ "median_income",
+    . == "B25070_001" ~ "rent_burden",
+    . == "B25003_002" ~ "homeowners",
+    . == "B25003_003" ~ "renters",
+    . == "B17001_002" ~ "poverty",
+    TRUE ~ .
+  )) %>%
+  mutate(
+    homeownership_rate = homeowners / (homeowners + renters) * 100,
+    rent_burden_rate = rent_burden / (homeowners + renters) * 100
+  )
+
+housing_cleaned <- housing_cleaned %>%
+  mutate(NAME = str_remove(NAME, " County, California$"))
+
+# 📌 Merge ACS data with county geometry using a Left Join
+housing_map_data <- left_join(ca_counties, housing_cleaned, by = c("NAME" = "NAME"))
+```
+
+```{r}
+print(housing_cleaned$NAME)
+```
+
+# Data Visualization
+
+## Median Household Income
+
+```{r}
+housing_cleaned[, c("NAME", "median_income")]
+```
+
+```{r}
+# Plot the California Map - Median Income by County
+ggplot(housing_map_data) +
+  geom_sf(aes(fill = median_income), color = "white", lwd = 0.2) +
+  scale_fill_viridis_c(option = "magma", name = "Median Income ($)") +
+  labs(title = "Median Household Income by County in California (2023)",
+       subtitle = "Source: American Community Survey 2023 (5-Year Estimates)") +
+  theme_minimal()
+```
+
+```{r}
+# Plot the California Map - Median Income by County
+ggplot(housing_map_data) +
+  geom_sf(aes(fill = median_income), color = "white", lwd = 0.2) +
+  scale_fill_viridis_c(option = "viridis", name = "Median Income ($)") +
+  labs(title = "Median Household Income by County in California (2023)",
+       subtitle = "Source: American Community Survey 2023 (5-Year Estimates)") +
+  theme_minimal()
+```
+
+## Rent Burden Rate
+
+```{r}
+summary(housing_cleaned$rent_burden_rate)
+```
+
+```{r}
+housing_map_data %>%
+  arrange(desc(rent_burden_rate)) %>%
+  select(NAME, rent_burden_rate) %>%
+  head(10)  # Show top 10 highest burdened counties
+```
+
+```{r}
+ggplot(housing_map_data) +
+  geom_sf(aes(fill = rent_burden_rate), color = "white", lwd = 0.2) +
+  scale_fill_viridis_c(option = "magma", name = "Rent Burden (%)", na.value = "gray90") +
+  labs(title = "Rent Burden Rate by County in California (2023)",
+       subtitle = "Percentage of Households Paying 30%+ of Income on Rent",
+       caption = "Source: American Community Survey 2023 (5-Year Estimates)") +
+  theme_minimal()
+```
+
+```{r}
+# Define county categories
+housing_map_data <- housing_map_data %>%
+  mutate(region = case_when(
+    NAME %in% c("Alameda", "Contra Costa", "Marin", "Napa", "San Francisco", 
+                "San Mateo", "Santa Clara", "Solano", "Sonoma") ~ "Bay Area",
+    NAME %in% c("Los Angeles", "Orange", "Riverside", "San Bernardino", "Ventura") ~ "Los Angeles Area",
+    TRUE ~ "Other Counties"
+  ))
+
+# Create scatter plot with custom colors
+ggplot(housing_map_data, aes(x = median_income, y = rent_burden_rate, color = region)) +
+  geom_point(alpha = 0.8, size = 3) +  # Differentiate by region
+  scale_color_manual(
+    name = "Region",
+    values = c("Bay Area" = "purple", "Los Angeles Area" = "pink", "Other Counties" = "blue")
+  ) +  
+  geom_smooth(method = "lm", se = TRUE, color = "darkred", linetype = "dashed", size = 1.2) +  # Linear trend with confidence interval
+  labs(title = "Relationship Between Median Income and Rent Burden Rate",
+       subtitle = "Bay Area and LA Area counties highlighted",
+       x = "Median Household Income ($)",
+       y = "Rent Burden Rate (%)") +
+  theme_minimal(base_size = 14) +  # Improve theme readability
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    legend.position = "right"
+  )
+
+```
+
+## Rent Burden Rate Change
+
+```{r}
+
+# Define ACS variable for Rent Burden
+acs_vars_rent_burden <- c("B25070_001")  # Households paying 30%+ on rent
+
+# Get ACS data for 2019
+rent_burden_2019 <- get_acs(
+  geography = "county",
+  variables = acs_vars_rent_burden,
+  state = "CA",
+  year = 2019,
+  survey = "acs5"
+) %>%
+  rename(rent_burden_2019 = estimate) %>%
+  select(NAME, rent_burden_2019)
+
+# Get ACS data for 2023
+rent_burden_2023 <- get_acs(
+  geography = "county",
+  variables = acs_vars_rent_burden,
+  state = "CA",
+  year = 2023,
+  survey = "acs5"
+) %>%
+  rename(rent_burden_2023 = estimate) %>%
+  select(NAME, rent_burden_2023)
+
+# Merge the datasets to compare 2019 vs 2023
+rent_burden_change <- left_join(rent_burden_2019, rent_burden_2023, by = "NAME") %>%
+  mutate(
+    rent_burden_change = rent_burden_2023 - rent_burden_2019,  # Absolute Change
+    rent_burden_pct_change = (rent_burden_change / rent_burden_2019) * 100  # Percentage Change
+  )
+
+# View the final dataset
+print(rent_burden_change)
+```
+
+```{r}
+top_10_rent_burden_change <- rent_burden_change %>%
+  arrange(desc(rent_burden_change)) %>%  # Sort in descending order
+  select(NAME, rent_burden_2019, rent_burden_2023, rent_burden_change_rate) %>%
+  head(10)  # Get top 10 counties
+
+print(top_10_rent_burden_change)
+```
+
+```{r}
+# Retrieve California County Shapefiles
+ca_counties <- counties(state = "CA", class = "sf")
+
+rent_burden_change <- rent_burden_change %>%
+  mutate(NAME = str_remove(NAME, " County, California$"))
+
+# Merge with rent burden data
+rent_burden_map <- left_join(ca_counties, rent_burden_change, by = c("NAME" = "NAME"))
+
+# Plot California Map: Rent Burden Change
+ggplot(rent_burden_map) +
+  geom_sf(aes(fill = rent_burden_change), color = "white", lwd = 0.2) +
+  scale_fill_viridis_c(option = "magma", name = "Change in Rent Burden") +
+  labs(title = "Rent Burden Change by County in California (2019-2023)",
+       subtitle = "Increase or decrease in households paying 30%+ income on rent") +
+  theme_minimal()
+```
